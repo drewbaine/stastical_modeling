@@ -1,0 +1,518 @@
+---
+title: "Final Portfolio"
+author: "Drew Baine"
+date: today
+format:
+  pdf:
+    self-contained: true
+    embed-resources: true
+execute:
+  eval: true  # Evaluate code
+  echo: false  # Show code
+  warning: false  # Suppress warnings
+  message: false  # Suppress messages
+---
+
+```{r}
+#| message: false
+#| warning: false
+#| echo: false
+library(ggformula)
+library(tidyverse)
+library(tidymodels)
+library(GGally)
+library(ISLR)
+library(skimr)
+# install.packages("nflreadr", repos = c("https://nflverse.r-universe.dev", getOption("repos")))
+library(dplyr)
+library(nflreadr)
+
+library(car)
+library(gt)
+```
+
+## Course-related learning and participation
+
+1.  **Describe probability as a foundation of statistical modeling, including inference and maximum likelihood estimation**
+
+Equation of voting always using rarely/never as the baseline
+
+$$
+\begin{aligned}
+\log\left(\frac{\hat{p}_{\text{always}}}{\hat{p}_{\text{rarely/never}}}\right) &= -2.9196 \\
+&+ 0.0582 \times \text{ppage} \\
+&- 1.2672 \times \text{educHigh school or less} \\
+&- 0.3303 \times \text{educSome college} \\
+&- 0.3410 \times \text{raceHispanic} \\
+&- 0.6005 \times \text{raceOther/Mixed} \\
+&+ 0.1272 \times \text{raceWhite} \\
+&- 0.1922 \times \text{genderMale} \\
+&- 0.00038 \times \text{income\_cat\$40-75k} \\
+&+ 0.1652 \times \text{income\_cat\$75-125k} \\
+&- 0.6641 \times \text{income\_catLess than \$40k} \\
+&+ 0.8387 \times \text{partyIndependent} \\
+&+ 1.4010 \times \text{partyDemocrat} \\
+&+ 1.2392 \times \text{partyRepublican}
+\end{aligned}
+$$
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+nonvoters<-read.csv("nonvoters.csv")%>%
+  select(ppage, educ, race, gender, income_cat, Q30, voter_category)
+
+
+nonvoters <- nonvoters %>%
+  mutate(
+    party = case_when(
+      Q30 == 1 ~ "Republican",
+      Q30 == 2 ~ "Democrat",
+      Q30 == 3 ~ "Independent",
+      Q30 %in% c(4, 5, -1) ~ "Other"
+    ),
+    party = factor(
+      party,
+      levels = c("Other", "Independent", "Democrat", "Republican")
+    ),
+    voter_category = factor(
+      voter_category,
+      levels = c("rarely/never", "sporadic", "always")
+    )
+  )
+```
+
+```{r}
+multi_mod_new <- multinom_reg() %>% 
+  set_engine("nnet") %>% 
+  fit(voter_category ~ ppage + educ + race + gender + income_cat + party, data = nonvoters)
+```
+
+```{r}
+voter_aug <- augment(multi_mod_new, new_data = nonvoters)
+
+
+
+voter_aug %>%
+  count(voter_category, .pred_class, .drop = FALSE) %>%
+  group_by(voter_category) %>%                  # normalize within actual class
+  mutate(prop = n / sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x = .pred_class, y = voter_category, fill = prop)) +
+  geom_tile() +
+  geom_text(aes(label = scales::percent(prop, accuracy = 1))) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(
+    x = "Predicted Class",
+    y = "Actual Class",
+    fill = "Proportion",
+    title = "Confusion Matrix",
+    tag = "Fig. 1 Confusion Matrix of actual voting characteristic vs predicted using model."
+  ) +
+  theme_minimal() +
+  theme(plot.tag.position = "bottom")
+  
+
+```
+
+An example of work that showcases probability as a foundation of statistical modeling is Homework 4, where I used multinomial logistic regression. In this assignment, I predicted the likelihood that a citizen would fall into one of three voting categories: rarely/never, sporadic, or always. The predictors included education, race, gender, income, and political party. This example demonstrates the objective because the model is built on probabilities, estimating how likely it is for an individual to belong to each voting category based on their characteristics. Rather than producing a single fixed outcome, the model uses probability to represent uncertainty and assign likelihoods to each possible result, which is a key foundation of statistical modeling.
+
+This example also demonstrates the role of inference and maximum likelihood estimation in statistical modeling. Inference allows me to interpret how each predictor affects the probability of voting behavior and determine whether those predictors have statistically meaningful relationships with the response variable. For example, factors such as age or party affiliation may significantly increase the probability of always voting compared to rarely or never voting. Maximum likelihood estimation is used to estimate the coefficients in the multinomial logistic regression model by finding the values that make the observed voting outcomes most likely. Together, this assignment clearly shows how probability serves as the basis for building, interpreting, and drawing conclusions from a statistical model.
+
+2.  **Apply the appropriate generalized linear model for a specific data context**
+
+#### Using NFL data to predict scores of games using a negative binomial
+
+```{r}
+games <- load_schedules(2018:2025) %>%
+  filter(game_type == "REG") %>%
+  select(season, week, home_team, away_team, home_score, away_score)
+```
+
+```{r}
+team_games <- bind_rows(
+  games %>%
+    transmute(
+      season,
+      week,
+      team = home_team,
+      opponent = away_team,
+      points = home_score,
+      home = 1
+    ),
+  games %>%
+    transmute(
+      season,
+      week,
+      team = away_team,
+      opponent = home_team,
+      points = away_score,
+      home = 0
+    )
+)
+```
+
+```{r}
+#| output: false
+pois_model <- glm(
+  points ~ team + opponent + home,
+  family = poisson(link = "log"),
+  data = team_games
+)
+
+summary(pois_model) 
+```
+
+```{r}
+
+new_game <- data.frame(
+  team = "DET",
+  opponent = "GB",
+  home = 1
+)
+
+pred_lambda <- predict(pois_model, new_game, type = "response")
+pred_lambda
+
+```
+
+```{r}
+team_games |>
+  filter(points >= 0, points <= 60) |>
+  count(points) |>
+  ggplot(aes(x = points, y = n)) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  labs(
+    title = "Distribution of NFL Team Scores",
+    subtitle = "excessive spread shows overdispersion",
+    x = "Points Scored",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+cat("mean:", mean(team_games$points), "\n")
+cat("variance:", var(team_games$points), "\n")
+```
+
+```{r}
+#| output: false
+library(MASS)
+
+nb_model <- glm.nb(
+  points ~ team + opponent + home,
+  data = team_games
+)
+
+summary(nb_model)
+```
+
+```{r}
+AIC(pois_model, nb_model) 
+```
+
+```{r}
+
+obs <- team_games %>%
+  count(points)
+
+lambda_pois <- mean(fitted(pois_model))
+lambda_nb   <- mean(fitted(nb_model))
+
+score_range <- 0:max(team_games$points)
+
+compare_df <- data.frame(
+  points = score_range,
+  observed = obs$n[match(score_range, obs$points)] %>% tidyr::replace_na(0),
+  poisson = dpois(score_range, lambda = lambda_pois) * nrow(team_games),
+  negbin = dnbinom(
+    score_range,
+    mu = lambda_nb,
+    size = nb_model$theta
+  ) * nrow(team_games)
+)
+
+compare_df %>%
+  pivot_longer(
+    cols = c(observed, poisson, negbin),
+    names_to = "model",
+    values_to = "count"
+  ) %>%
+  ggplot(aes(x = points, y = count, color = model)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Observed vs Fitted NFL Score Distributions",
+    x = "Points Scored",
+    y = "Frequency",
+    color = "Model"
+  ) +
+  theme_minimal()
+```
+
+Predicted points scored by Detroit Lions Vs Green Bay Packers when home
+
+```{r}
+new_game <- data.frame(
+  team = "DET",
+  opponent = "GB",
+  home = 1
+)
+
+predict(nb_model, newdata = new_game, type = "response")
+```
+
+The NFL scores predictor built using nflreadr applies a generalized linear model by modeling team points with a negative binomial regression. Because points are count data, a GLM with a log link is appropriate for modeling expected scoring. A Poisson regression was initially considered; however, exploratory analysis showed that the variance of points was substantially larger than the mean, indicating overdispersion. This violation of the Poisson assumption motivated the use of a negative binomial model, which allows the variance to exceed the mean while still modeling the expected value through a log-linear relationship.
+
+The model incorporates predictors such as team, opponent, and home-field advantage to estimate expected points using maximum likelihood estimation. This framework captures how game-specific factors influence scoring while accounting for the inherent variability in NFL outcomes.
+
+3.  **Demonstrate model selection given a set of candidate models**
+
+Multiple regression with both quantitative and qualitative predictors. - Backwards selection
+
+```{r}
+auto <- dplyr::select(ISLR::Auto, -origin, -name)
+ggpairs(auto)
+
+```
+
+```{r}
+lm_spec <- linear_reg() %>%
+  set_mode("regression") %>%
+  set_engine("lm")
+
+lm_spec
+```
+
+```{r}
+m1 <- lm_spec|>
+fit(acceleration ~ ., data = auto)
+glance(m1) -> model2.metrics
+tidy(m1) %>% arrange(p.value)%>% mutate((remove=p.value > 0.05))|> gt()
+
+```
+
+$$
+\hat{acceleration} =
+20.8612
+- 0.08572(\text{horsepower})
++ 0.00331(\text{weight})
+- 0.00815(\text{displacement})
+- 0.05630(\text{year})
+- 0.15490(\text{cylinders})
++ 0.02124(\text{mpg})
+$$
+
+```{r}
+m2 <- lm_spec|>
+fit(acceleration ~ ., data = dplyr::select(auto, -mpg))
+rbind(model2.metrics,glance(m2)) -> model2.metrics
+tidy(m2) %>% arrange(p.value)%>% mutate((remove=p.value > 0.05))|> gt()
+```
+
+$$
+\hat{acceleration} =
+20.589
+- 0.08588(\text{horsepower})
++ 0.00316(\text{weight})
+- 0.00799(\text{displacement})
+- 0.04037(\text{year})
+- 0.16219(\text{cylinders})
+$$
+
+```{r}
+
+m3 <- lm_spec |>
+  fit(acceleration ~ ., data = dplyr::select(auto, -mpg, -cylinders))
+
+model2.metrics <- rbind(model2.metrics, glance(m3))
+
+tidy(m3) %>%
+  arrange(p.value) %>%
+  mutate(remove = p.value > 0.05)|> gt()
+```
+
+$$
+\hat{acceleration} =
+20.197
+- 0.08540(\text{horsepower})
++ 0.00313(\text{weight})
+- 0.01043(\text{displacement})
+- 0.04010(\text{year})
+$$
+
+```{r}
+m4 <- lm_spec|>
+fit(acceleration ~ ., data = dplyr::select(auto, -mpg, -cylinders, -year))
+rbind(model2.metrics,glance(m4)) -> model2.metrics
+tidy(m4) %>% arrange(p.value)%>% mutate(remove=p.value > 0.05) |> gt()
+
+```
+
+$$
+\hat{acceleration} =
+17.0729
+- 0.08353(\text{horsepower})
++ 0.00307(\text{weight})
+- 0.01002(\text{displacement})
+$$
+
+```{r}
+new_auto <- dplyr::select(auto, -mpg, -cylinders, -year)
+ggpairs(new_auto)
+
+```
+
+An example where I was able to demonstrate model selection given a set of candidate model was homework 3, backwards selection. Backward selection demonstrates model selection in my multiple linear regression work with the Auto dataset by starting with a full model that includes all potential predictors of acceleration, such as horsepower, weight, displacement, mpg, year, and cylinders. This full model represents the initial set of candidate models.
+
+The method then iteratively removes the least useful predictors based on statistical significance and model fit, comparing simpler nested models at each step. In my results, variables like horsepower and weight remained important, while others such as cylinders and mpg were removed or deemed less impactful. Although my final model does include weight displacement and horsepower because they are all statistically significant, there does happen to be some multicollinearity. As weight predictor goes up, so does acceleration. If weight was the only predictor there would be a negative relationship. This is where my model fails
+
+Overall, this process shows model selection by systematically choosing a simpler, better-fitting model from a set of candidates, balancing explanatory power with interpretability.
+
+4.  **Express the results of statistical models to a general audience**
+
+### Intepretations of previous results
+
+*y intercept*: for a car with 0 weight, 0 horsepower, 0 displacement, the expected acceleration is 17.07 seconds.\
+*weight*: as a car increases its weight by 1, the expected 0-60 time is expected to increase by .003 seconds holding all other variables constant. Although weight and acceleration have a negative relationship, in this model it is positive due to multicollinearity.\
+*horsepower*: as a car increases its horsepower by 1 unit, the expected 0-60 time is expected to decrease by .084 seconds holding all other variables constant. \
+*displacement*: as a car increases its displacement by 1 $inch^3$, the exp
+
+$r^2$: 61.98 of the variation in acceleration can be explained by weight horsepower and displacement
+
+Expressing the results of statistical models to a general audience was shown throughout the course. An example of this is interpenetrating the data from the previous results. This example takes results from my model and makes it interpretable to a general audience.
+
+5.  **Use programming software to fit and assess statistical models**
+
+### PCA Regression
+
+```{r}
+players <- load_player_stats(2025)
+
+df <- players %>%
+  filter(position == "QB") %>%
+  dplyr::select(fantasy_points, passing_yards, completions) %>%
+  na.omit()
+
+ggplot(df, aes(x = completions, y = passing_yards)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Passing Yards vs Completions (NFL QBs, 2021)",
+    x = "Completions",
+    y = "Passing Yards"
+  ) +
+  theme_minimal()
+cor(df$passing_yards, df$completions)
+```
+
+Since there is high Multicollinearity between passing yards and completions we will use PCA address the multicollinearity.
+
+```{r}
+library(pls)
+pcr.fit <- pcr(fantasy_points ~ ., data = df, scale = TRUE,
+validation = "CV")
+
+summary(pcr.fit)
+
+```
+
+```{r}
+validationplot(pcr.fit, val.type = "MSEP")
+```
+
+```{r}
+pred <- predict(pcr.fit, ncomp = 2)
+
+plot(
+  df$fantasy_points,
+  pred,
+  xlab = "Actual Fantasy Points",
+  ylab = "Predicted Fantasy Points",
+  main = "PCR: Actual vs Predicted Fantasy Points"
+)
+
+abline(0, 1, col = "red")
+
+
+```
+
+```{r}
+df_plot <- data.frame(
+  pc1 = pcr.fit$scores[,1],
+  pc2 = pcr.fit$scores[,2],
+  actual = df$fantasy_points
+)
+
+
+ggplot(df_plot, aes(x = pc1, y = actual)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Fantasy Points vs Principal Component 1",
+    x = "PC1 (Main Player Performance Component)",
+    y = "Actual Fantasy Points"
+  )
+
+ggplot(df_plot, aes(x = pc2, y = actual)) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Fantasy Points vs Principal Component 2",
+    x = "PC2 (Secondary Variation)",
+    y = "Actual Fantasy Points"
+  )
+```
+
+### Polynomial Regression
+
+```{r}
+attach(Wage)
+fit <- lm(wage ~ poly(age, 4), data = Wage)
+coef(summary(fit))
+
+ggplot(Wage, aes(x = age, y = wage)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ poly(x, 4),
+    se = FALSE
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Polynomial Regression: Wage vs Age",
+    x = "Age",
+    y = "Wage"
+  )
+```
+
+```{r}
+fit_raw <- lm(wage ~ poly(age, 4, raw = TRUE), data = Wage)
+coef(fit_raw)
+```
+
+$$
+\widehat{\text{wage}} =
+-184.1542
++ 21.24552(\text{age})
+- 0.5638593(\text{age}^2)
++ 0.006810688(\text{age}^3)
+- 0.00003203830(\text{age}^4)
+$$
+```{r}
+fit2 <- lm(wage ~ poly(age, 1, raw = TRUE), data = Wage)
+fit3 <- lm(wage ~ poly(age, 3, raw = TRUE), data = Wage)
+fit4 <- lm(wage ~ poly(age, 4, raw = TRUE), data = Wage)
+
+AIC(fit2, fit3, fit4)
+```
+
+
+Throughout the course of the semester, I have been able to use programming software to fit and assess statistical models. The software I used in this class was R and the tidymodels framework. The models I worked with included linear regression, multiple linear regression with both quantitative and qualitative variables, logistic regression (binomial and multinomial), along with generalized linear models and polynomial functions.
+
+For example, in the polynomial regression model, I used R to fit a fourth-degree model predicting wage from age and assessed it using coefficient significance, visualizations in ggplot(), and AIC to compare model fit and complexity. I also used principal component regression to predict fantasy points, where I transformed highly correlated predictors into principal components and assessed the model using cross-validated RMSEP and explained variance. Together, these examples demonstrate how programming software was used throughout the semester to both estimate models and evaluate their performance.
+
+
